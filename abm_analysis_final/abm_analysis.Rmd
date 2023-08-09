@@ -1,0 +1,237 @@
+---
+title: "ABM analysis"
+output: html_document
+date: "2023-05-31"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loading packages
+```{r}
+pacman::p_load(tidyverse, ggplot2, plotly, lme4, RColorBrewer)
+```
+
+# Loading data
+```{r}
+# Put data file from ABM script into the read_csv
+data <- read_csv("simple_ABM_V1.csv")
+```
+
+# Preprocessing the data
+
+```{r}
+# Turning team_cps  
+data <- data %>% 
+  mutate(team_cps = as.factor(team_cps))
+```
+
+```{r}
+# Create a function which splits the character string of numbers (cps leves) into a list of integers
+
+convert_to_vector <- function(string) {
+  string <- gsub("\\[|\\]", "", string)  # Remove square brackets
+  vector <- as.numeric(unlist(strsplit(string, ",")))  # Split by comma and convert to numeric
+  return(vector)
+}
+```
+
+```{r}
+# converting to numeric
+data$numeric <-  sapply(data$team_cps, convert_to_vector)
+
+# sum column
+data$sum_cps <- sapply(data$numeric, sum)
+
+# calculating mean cps
+data$mean_cps <- sapply(data$numeric, mean)
+
+# calculating variance of teams
+data$var_cps <- sapply(data$numeric, var)
+
+# calculating standard deviation
+data$sd_cps <- sapply(data$numeric, sd)
+
+# calculating a combined measure of mean and variance which is a composition score
+data <- data %>% 
+  mutate(score_cps = mean_cps * var_cps)
+
+## with mean and sd
+data <- data %>% 
+  mutate(score_sd_cps = mean_cps * sd_cps)
+
+
+data <- data %>% 
+  mutate(score_inn_cps = (mean_cps * (1+ var_cps) ) / team_size)
+
+```
+
+
+```{r do i use this?}
+# sorintg cps into highest first order 
+data$sorted_team_cps <- lapply(data$numeric, function(lst) lst[order(-lst)])
+```
+
+
+```{r}
+# creating a function which filters all unique teams
+# by saying every time 7000 rows has passed we make sure there are no duplicate team ids for the next 7000 rows
+
+remove_duplicates_every_n_rows <- function(data, column, n) {
+  new_data <- data.frame()  # Create an empty data frame to store the results
+  for (i in seq(1, nrow(data), n)) {
+    start_index <- i
+    end_index <- min(i + n - 1, nrow(data))
+    subset_data <- data[start_index:end_index, ]
+    subset_data <- distinct(subset_data, {{ column }}, .keep_all = TRUE)
+    new_data <- bind_rows(new_data, subset_data)  # Append the subset to the new data frame
+  }
+  return(new_data)
+}
+
+```
+
+```{r}
+data_uniqueteams <- remove_duplicates_every_n_rows(data, team_id, 7000)
+```
+
+# Creating plots
+
+
+## Decriptive plots
+
+```{r}
+hist(data_uniqueteams$problem_complexity)
+```
+
+```{r}
+hist(data_uniqueteams$team_best_solutions_mean)
+```
+
+```{r}
+hist(data_uniqueteams$team_size)
+```
+
+```{r}
+hist(data_uniqueteams$score_sd_cps)
+
+hist(data_uniqueteams$score_cps)
+```
+
+```{r}
+data_uniqueteams %>% 
+  ggplot(aes(x=mean_cps,y=team_best_solutions_mean))+
+  geom_smooth()
+  
+```
+
+
+## Analysis plot
+
+```{r}
+
+```
+
+
+```{r}
+data_dyadic_teams <- data_uniqueteams %>% 
+  filter(team_size==2) %>%
+  mutate(Agent_A = sapply(numeric, "[", 1),
+         Agent_B = sapply(numeric, "[", 2))
+```
+
+### 3D dyad plot
+```{r}
+fig <- plot_ly(data_dyadic_teams, x = ~Agent_A, y = ~Agent_B, z = ~team_best_solutions_mean, color = ~team_best_solutions_mean, colors = c('#FC6A03', '#893101'))
+fig <- fig %>% add_markers()
+fig <- fig %>% layout(title = "Dyad Teams Joint Performance (simple model)",
+                      scene = list(
+                      xaxis = list(title = 'AgentA'),
+                     yaxis = list(title = 'AgentB'),
+                     zaxis = list(title = 'Mean of Team Solutions')
+                     ),
+                     legend = list(
+                       title = list(text = "Mean of Team Solutions")))
+                     
+fig
+```
+### Mean CPS vs SD Cps
+```{r}
+data_uniqueteams %>% 
+  ggplot(aes(x = mean_cps, y = var_cps, color = team_best_solutions_mean)) +
+  geom_point() +
+  facet_wrap(~ team_size, labeller = labeller()) +
+  theme_minimal() +
+  scale_colour_gradientn(colours = brewer.pal(6, "Oranges")) +
+  labs(x = "Mean of Team CPS Levels", y = "SD of team CPS levels", color="Mean of Team Solutions")
+
+  
+```
+
+
+# Statistics
+
+## modelling dyadic
+```{r}
+colnames(data_dyadic_teams)
+
+```
+
+
+```{r}
+model_dyad <- lm(team_best_solutions_mean ~ Agent_A * Agent_B, data=data_dyadic_teams)
+
+summary(model_dyad)
+```
+
+#### adding team performance measures
+```{r}
+model_dyad1 <- lm(total_conflicts ~ Agent_A * Agent_B, data=data_dyadic_teams)
+
+summary(model_dyad1)
+```
+```{r}
+model_dyad2 <- lm(total_common_ground ~ Agent_A * Agent_B, data=data_dyadic_teams)
+
+summary(model_dyad1)
+```
+
+```{r}
+model_dyad3 <- lm(total_conflicts_resolved ~ Agent_A * Agent_B, data=data_dyadic_teams)
+
+summary(model_dyad3)
+```
+
+```{r}
+model_dyad4 <- lm(problem_complexity ~ Agent_A * Agent_B * team_best_solutions_mean, data=data_dyadic_teams)
+
+summary(model_dyad4)
+```
+
+## modellin larger teams
+
+```{r}
+
+model_teams <- lm(team_best_solutions_mean ~ mean_cps * sd_cps * team_size , data=data_uniqueteams)
+
+summary(model_teams)
+```
+
+#### Predicting team performance measures
+```{r}
+model_teams1 <- lm(total_common_ground ~ mean_cps * sd_cps * team_size, data=data_uniqueteams)
+
+summary(model_teams1)
+```
+```{r}
+model_teams2 <- lm(total_conflicts ~ mean_cps * sd_cps * team_size, data=data_uniqueteams)
+
+summary(model_teams2)
+```
+```{r}
+model_teams3 <- lm(total_conflicts_resolved ~ mean_cps * sd_cps * team_size, data=data_uniqueteams)
+
+summary(model_teams3)
+```
+
